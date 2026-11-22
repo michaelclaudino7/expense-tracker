@@ -44,7 +44,7 @@ The database listens on port 5433 on the host to avoid clashing with a local Pos
 
 ## Roadmap
 
-- [ ] Unit and integration tests
+- [x] Unit tests for input validation
 - [ ] Pagination
 - [ ] User accounts and JWT authentication
 - [ ] Budget per category
