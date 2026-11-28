@@ -40,6 +40,8 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+
+	// Public routes.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
 			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
@@ -52,14 +54,17 @@ func main() {
 	authHandler := auth.NewHandler(user.NewRepository(pool), tokens)
 	authHandler.RegisterRoutes(mux)
 
+	// Protected routes: every one goes through the JWT middleware.
+	authMW := tokens.Middleware
+
 	categoryHandler := category.NewHandler(category.NewRepository(pool))
-	categoryHandler.RegisterRoutes(mux)
+	categoryHandler.RegisterRoutes(mux, authMW)
 
 	transactionHandler := transaction.NewHandler(transaction.NewRepository(pool))
-	transactionHandler.RegisterRoutes(mux)
+	transactionHandler.RegisterRoutes(mux, authMW)
 
 	reportHandler := report.NewHandler(report.NewRepository(pool))
-	reportHandler.RegisterRoutes(mux)
+	reportHandler.RegisterRoutes(mux, authMW)
 
 	log.Println("API listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", mux))
