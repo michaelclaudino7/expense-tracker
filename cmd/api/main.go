@@ -5,16 +5,24 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/michaelclaudino7/expense-tracker/internal/auth"
 	"github.com/michaelclaudino7/expense-tracker/internal/category"
 	"github.com/michaelclaudino7/expense-tracker/internal/report"
 	"github.com/michaelclaudino7/expense-tracker/internal/transaction"
+	"github.com/michaelclaudino7/expense-tracker/internal/user"
 )
 
 func main() {
 	ctx := context.Background()
+
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if len(jwtSecret) < 32 {
+		log.Fatal("JWT_SECRET must be set and have at least 32 characters")
+	}
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -39,6 +47,10 @@ func main() {
 		}
 		w.Write([]byte("ok"))
 	})
+
+	tokens := auth.NewTokenManager(jwtSecret, 24*time.Hour)
+	authHandler := auth.NewHandler(user.NewRepository(pool), tokens)
+	authHandler.RegisterRoutes(mux)
 
 	categoryHandler := category.NewHandler(category.NewRepository(pool))
 	categoryHandler.RegisterRoutes(mux)
