@@ -36,7 +36,7 @@ The database listens on port 5433 on the host to avoid clashing with a local Pos
 | PUT | /categories/{id} | Update a category |
 | DELETE | /categories/{id} | Delete a category |
 | POST | /transactions | Create a transaction |
-| GET | /transactions | List transactions (optional `from`, `to`, `category_id`) |
+| GET | /transactions | List transactions, paginated (optional `from`, `to`, `category_id`, `page`, `page_size`) |
 | GET | /transactions/{id} | Get a transaction |
 | PUT | /transactions/{id} | Update a transaction |
 | DELETE | /transactions/{id} | Delete a transaction |
@@ -45,7 +45,7 @@ The database listens on port 5433 on the host to avoid clashing with a local Pos
 ## Roadmap
 
 - [x] Unit tests for input validation
-- [ ] Pagination
+- [x] Pagination
 - [ ] User accounts and JWT authentication
 - [ ] Budget per category
 - [ ] CSV export
