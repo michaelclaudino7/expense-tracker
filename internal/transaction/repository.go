@@ -8,11 +8,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-const pgForeignKeyViolation = "23503"
 
 // Columns returned by every query. Joined with categories to get name and type.
 const selectColumns = `t.id, t.category_id, c.name, c.type, t.description,
@@ -40,7 +37,9 @@ func scanTransaction(s scanner) (Transaction, error) {
 	return t, err
 }
 
-func (r *Repository) Create(ctx context.Context, in Input) (Transaction, error) {
+// Create inserts a transaction only if the category belongs to the same user.
+// When it does not, the INSERT ... SELECT produces no row and we return ErrCategoryNotFound.
+func (r *Repository) Create(ctx context.Context, userID int64, in Input) (Transaction, error) {
 	date, err := time.Parse(dateLayout, in.OccurredOn)
 	if err != nil {
 		return Transaction{}, err
@@ -48,25 +47,30 @@ func (r *Repository) Create(ctx context.Context, in Input) (Transaction, error) 
 
 	query := `
         WITH t AS (
-            INSERT INTO transactions (category_id, description, amount_cents, occurred_on)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO transactions (user_id, category_id, description, amount_cents, occurred_on)
+            SELECT $1, c.id, $3, $4, $5
+            FROM categories c
+            WHERE c.id = $2 AND c.user_id = $1
             RETURNING *
         )
         SELECT ` + selectColumns + `
         FROM t
         JOIN categories c ON c.id = t.category_id`
 
-	row := r.db.QueryRow(ctx, query, in.CategoryID, in.Description, in.AmountCents, date)
+	row := r.db.QueryRow(ctx, query, userID, in.CategoryID, in.Description, in.AmountCents, date)
 	tx, err := scanTransaction(row)
 	if err != nil {
-		return Transaction{}, translateError(err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Transaction{}, ErrCategoryNotFound
+		}
+		return Transaction{}, err
 	}
 	return tx, nil
 }
 
-func (r *Repository) List(ctx context.Context, f Filter, p Pagination) ([]Transaction, int, error) {
-	conditions := []string{}
-	args := []any{}
+func (r *Repository) List(ctx context.Context, userID int64, f Filter, p Pagination) ([]Transaction, int, error) {
+	args := []any{userID}
+	conditions := []string{"t.user_id = $1"}
 
 	// Placeholders ($1, $2...) are generated, but values always go in args.
 	if f.From != nil {
@@ -82,10 +86,7 @@ func (r *Repository) List(ctx context.Context, f Filter, p Pagination) ([]Transa
 		conditions = append(conditions, fmt.Sprintf("t.category_id = $%d", len(args)))
 	}
 
-	where := ""
-	if len(conditions) > 0 {
-		where = " WHERE " + strings.Join(conditions, " AND ")
-	}
+	where := " WHERE " + strings.Join(conditions, " AND ")
 
 	// First, how many rows match the filters (ignoring the page).
 	var total int
@@ -118,64 +119,73 @@ func (r *Repository) List(ctx context.Context, f Filter, p Pagination) ([]Transa
 	return transactions, total, rows.Err()
 }
 
-func (r *Repository) Get(ctx context.Context, id int64) (Transaction, error) {
+func (r *Repository) Get(ctx context.Context, userID, id int64) (Transaction, error) {
 	query := `SELECT ` + selectColumns + `
         FROM transactions t
         JOIN categories c ON c.id = t.category_id
-        WHERE t.id = $1`
+        WHERE t.id = $1 AND t.user_id = $2`
 
-	tx, err := scanTransaction(r.db.QueryRow(ctx, query, id))
+	tx, err := scanTransaction(r.db.QueryRow(ctx, query, id, userID))
 	if err != nil {
-		return Transaction{}, translateError(err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Transaction{}, ErrNotFound
+		}
+		return Transaction{}, err
 	}
 	return tx, nil
 }
 
-func (r *Repository) Update(ctx context.Context, id int64, in Input) (Transaction, error) {
+// Update changes a transaction of the user. The new category must also belong to the user.
+func (r *Repository) Update(ctx context.Context, userID, id int64, in Input) (Transaction, error) {
 	date, err := time.Parse(dateLayout, in.OccurredOn)
 	if err != nil {
 		return Transaction{}, err
+	}
+
+	// Check the target category first, so we can tell the two failures apart.
+	var categoryExists bool
+	err = r.db.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM categories WHERE id = $1 AND user_id = $2)`,
+		in.CategoryID, userID,
+	).Scan(&categoryExists)
+	if err != nil {
+		return Transaction{}, err
+	}
+	if !categoryExists {
+		return Transaction{}, ErrCategoryNotFound
 	}
 
 	query := `
         WITH t AS (
             UPDATE transactions
             SET category_id = $1, description = $2, amount_cents = $3, occurred_on = $4
-            WHERE id = $5
+            WHERE id = $5 AND user_id = $6
             RETURNING *
         )
         SELECT ` + selectColumns + `
         FROM t
         JOIN categories c ON c.id = t.category_id`
 
-	row := r.db.QueryRow(ctx, query, in.CategoryID, in.Description, in.AmountCents, date, id)
+	row := r.db.QueryRow(ctx, query, in.CategoryID, in.Description, in.AmountCents, date, id, userID)
 	tx, err := scanTransaction(row)
 	if err != nil {
-		return Transaction{}, translateError(err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Transaction{}, ErrNotFound
+		}
+		return Transaction{}, err
 	}
 	return tx, nil
 }
 
-func (r *Repository) Delete(ctx context.Context, id int64) error {
-	tag, err := r.db.Exec(ctx, `DELETE FROM transactions WHERE id = $1`, id)
+func (r *Repository) Delete(ctx context.Context, userID, id int64) error {
+	tag, err := r.db.Exec(ctx,
+		`DELETE FROM transactions WHERE id = $1 AND user_id = $2`,
+		id, userID)
 	if err != nil {
-		return translateError(err)
+		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
 	return nil
-}
-
-// translateError converts low-level database errors into our own named errors.
-func translateError(err error) error {
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
-		return ErrCategoryNotFound
-	}
-	return err
 }

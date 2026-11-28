@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/michaelclaudino7/expense-tracker/internal/auth"
 )
 
 type Handler struct {
@@ -18,21 +20,28 @@ func NewHandler(repo *Repository) *Handler {
 }
 
 // RegisterRoutes attaches all transaction endpoints to the given mux.
-func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /transactions", h.create)
-	mux.HandleFunc("GET /transactions", h.list)
-	mux.HandleFunc("GET /transactions/{id}", h.get)
-	mux.HandleFunc("PUT /transactions/{id}", h.update)
-	mux.HandleFunc("DELETE /transactions/{id}", h.delete)
+// Every route is wrapped by the authentication middleware.
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, authMW func(http.Handler) http.Handler) {
+	protect := func(f http.HandlerFunc) http.Handler { return authMW(f) }
+
+	mux.Handle("POST /transactions", protect(h.create))
+	mux.Handle("GET /transactions", protect(h.list))
+	mux.Handle("GET /transactions/{id}", protect(h.get))
+	mux.Handle("PUT /transactions/{id}", protect(h.update))
+	mux.Handle("DELETE /transactions/{id}", protect(h.delete))
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUser(w, r)
+	if !ok {
+		return
+	}
 	in, ok := decodeInput(w, r)
 	if !ok {
 		return
 	}
 
-	tx, err := h.repo.Create(r.Context(), in)
+	tx, err := h.repo.Create(r.Context(), userID, in)
 	if err != nil {
 		writeRepoError(w, err)
 		return
@@ -41,6 +50,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUser(w, r)
+	if !ok {
+		return
+	}
 	filter, ok := parseFilter(w, r)
 	if !ok {
 		return
@@ -50,7 +63,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	transactions, total, err := h.repo.List(r.Context(), filter, pagination)
+	transactions, total, err := h.repo.List(r.Context(), userID, filter, pagination)
 	if err != nil {
 		writeRepoError(w, err)
 		return
@@ -59,12 +72,16 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUser(w, r)
+	if !ok {
+		return
+	}
 	id, ok := parseID(w, r)
 	if !ok {
 		return
 	}
 
-	tx, err := h.repo.Get(r.Context(), id)
+	tx, err := h.repo.Get(r.Context(), userID, id)
 	if err != nil {
 		writeRepoError(w, err)
 		return
@@ -73,6 +90,10 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUser(w, r)
+	if !ok {
+		return
+	}
 	id, ok := parseID(w, r)
 	if !ok {
 		return
@@ -82,7 +103,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.repo.Update(r.Context(), id, in)
+	tx, err := h.repo.Update(r.Context(), userID, id, in)
 	if err != nil {
 		writeRepoError(w, err)
 		return
@@ -91,16 +112,31 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUser(w, r)
+	if !ok {
+		return
+	}
 	id, ok := parseID(w, r)
 	if !ok {
 		return
 	}
 
-	if err := h.repo.Delete(r.Context(), id); err != nil {
+	if err := h.repo.Delete(r.Context(), userID, id); err != nil {
 		writeRepoError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// currentUser reads the user id set by the auth middleware.
+// It should never fail on protected routes, but we fail closed if it does.
+func currentUser(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return 0, false
+	}
+	return id, true
 }
 
 // parseFilter reads the optional query params: from, to (YYYY-MM-DD) and category_id.
