@@ -64,11 +64,7 @@ func (r *Repository) Create(ctx context.Context, in Input) (Transaction, error) 
     return tx, nil
 }
 
-func (r *Repository) List(ctx context.Context, f Filter) ([]Transaction, error) {
-    query := `SELECT ` + selectColumns + `
-        FROM transactions t
-        JOIN categories c ON c.id = t.category_id`
-
+func (r *Repository) List(ctx context.Context, f Filter, p Pagination) ([]Transaction, int, error) {
     conditions := []string{}
     args := []any{}
 
@@ -86,14 +82,28 @@ func (r *Repository) List(ctx context.Context, f Filter) ([]Transaction, error) 
         conditions = append(conditions, fmt.Sprintf("t.category_id = $%d", len(args)))
     }
 
+    where := ""
     if len(conditions) > 0 {
-        query += " WHERE " + strings.Join(conditions, " AND ")
+        where = " WHERE " + strings.Join(conditions, " AND ")
     }
-    query += " ORDER BY t.occurred_on DESC, t.id DESC"
+
+    // First, how many rows match the filters (ignoring the page).
+    var total int
+    err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM transactions t`+where, args...).Scan(&total)
+    if err != nil {
+        return nil, 0, err
+    }
+
+    // Then, only the rows of the requested page.
+    args = append(args, p.PageSize, p.Offset())
+    query := `SELECT ` + selectColumns + `
+        FROM transactions t
+        JOIN categories c ON c.id = t.category_id` + where +
+        fmt.Sprintf(" ORDER BY t.occurred_on DESC, t.id DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args))
 
     rows, err := r.db.Query(ctx, query, args...)
     if err != nil {
-        return nil, err
+        return nil, 0, err
     }
     defer rows.Close()
 
@@ -101,11 +111,11 @@ func (r *Repository) List(ctx context.Context, f Filter) ([]Transaction, error) 
     for rows.Next() {
         tx, err := scanTransaction(rows)
         if err != nil {
-            return nil, err
+            return nil, 0, err
         }
         transactions = append(transactions, tx)
     }
-    return transactions, rows.Err()
+    return transactions, total, rows.Err()
 }
 
 func (r *Repository) Get(ctx context.Context, id int64) (Transaction, error) {

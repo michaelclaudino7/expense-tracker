@@ -45,13 +45,17 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
     if !ok {
         return
     }
+    pagination, ok := parsePagination(w, r)
+    if !ok {
+        return
+    }
 
-    transactions, err := h.repo.List(r.Context(), filter)
+    transactions, total, err := h.repo.List(r.Context(), filter, pagination)
     if err != nil {
         writeRepoError(w, err)
         return
     }
-    writeJSON(w, http.StatusOK, transactions)
+    writeJSON(w, http.StatusOK, newPagedResult(transactions, total, pagination))
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
