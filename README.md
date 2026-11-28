@@ -23,6 +23,16 @@ A personal expense tracking REST API built with Go and PostgreSQL.
 3. Run the API: `go run ./cmd/api`
 4. Check it: `curl.exe localhost:8080/health`
 
+The API refuses to start without `JWT_SECRET` (at least 32 characters). In PowerShell:
+
+```powershell
+$bytes = New-Object byte[] 32
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$env:JWT_SECRET = [Convert]::ToBase64String($bytes)
+```
+
+Run the API in the same terminal where the variable was set.
+
 The database listens on port 5433 on the host to avoid clashing with a local PostgreSQL on 5432.
 
 ## Endpoints
@@ -30,6 +40,8 @@ The database listens on port 5433 on the host to avoid clashing with a local Pos
 | Method | Route | Description |
 |---|---|---|
 | GET | /health | Health check |
+| POST | /auth/register | Register and get a JWT (public) |
+| POST | /auth/login | Log in and get a JWT (public) |
 | POST | /categories | Create a category |
 | GET | /categories | List categories |
 | GET | /categories/{id} | Get a category |
@@ -42,10 +54,12 @@ The database listens on port 5433 on the host to avoid clashing with a local Pos
 | DELETE | /transactions/{id} | Delete a transaction |
 | GET | /reports/monthly?month=YYYY-MM | Monthly report |
 
+All routes except `/health` and `/auth/*` require the header `Authorization: Bearer <token>`. Each user only sees their own data.
+
 ## Roadmap
 
 - [x] Unit tests for input validation
 - [x] Pagination
-- [ ] User accounts and JWT authentication
+- [x] User accounts and JWT authentication
 - [ ] Budget per category
 - [ ] CSV export
