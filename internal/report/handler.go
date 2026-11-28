@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+
+	"github.com/michaelclaudino7/expense-tracker/internal/auth"
 )
 
 type Handler struct {
@@ -15,11 +17,18 @@ func NewHandler(repo *Repository) *Handler {
 }
 
 // RegisterRoutes attaches the report endpoints to the given mux.
-func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /reports/monthly", h.monthly)
+// Every route is wrapped by the authentication middleware.
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, authMW func(http.Handler) http.Handler) {
+	mux.Handle("GET /reports/monthly", authMW(http.HandlerFunc(h.monthly)))
 }
 
 func (h *Handler) monthly(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
 	month := r.URL.Query().Get("month")
 	if month == "" {
 		writeError(w, http.StatusBadRequest, "month is required, in the format YYYY-MM")
@@ -32,7 +41,7 @@ func (h *Handler) monthly(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	report, err := h.repo.Monthly(r.Context(), start)
+	report, err := h.repo.Monthly(r.Context(), userID, start)
 	if err != nil {
 		log.Printf("internal error: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal server error")

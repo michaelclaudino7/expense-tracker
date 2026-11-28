@@ -15,18 +15,18 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
-// Monthly builds the report for the month that starts at the given date.
-func (r *Repository) Monthly(ctx context.Context, start time.Time) (Monthly, error) {
+// Monthly builds the report of one user for the month that starts at the given date.
+func (r *Repository) Monthly(ctx context.Context, userID int64, start time.Time) (Monthly, error) {
 	end := start.AddDate(0, 1, 0) // first day of the next month (exclusive)
 
 	rows, err := r.db.Query(ctx,
 		`SELECT c.id, c.name, c.type, SUM(t.amount_cents)::bigint
          FROM transactions t
          JOIN categories c ON c.id = t.category_id
-         WHERE t.occurred_on >= $1 AND t.occurred_on < $2
+         WHERE t.user_id = $1 AND t.occurred_on >= $2 AND t.occurred_on < $3
          GROUP BY c.id, c.name, c.type
          ORDER BY c.type DESC, SUM(t.amount_cents) DESC`,
-		start, end,
+		userID, start, end,
 	)
 	if err != nil {
 		return Monthly{}, err
