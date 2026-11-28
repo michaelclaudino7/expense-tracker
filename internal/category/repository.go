@@ -23,13 +23,13 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
-func (r *Repository) Create(ctx context.Context, in Input) (Category, error) {
+func (r *Repository) Create(ctx context.Context, userID int64, in Input) (Category, error) {
 	var c Category
 	err := r.db.QueryRow(ctx,
-		`INSERT INTO categories (name, type)
-         VALUES ($1, $2)
+		`INSERT INTO categories (user_id, name, type)
+         VALUES ($1, $2, $3)
          RETURNING id, name, type, created_at`,
-		in.Name, in.Type,
+		userID, in.Name, in.Type,
 	).Scan(&c.ID, &c.Name, &c.Type, &c.CreatedAt)
 	if err != nil {
 		return Category{}, translateError(err)
@@ -37,11 +37,13 @@ func (r *Repository) Create(ctx context.Context, in Input) (Category, error) {
 	return c, nil
 }
 
-func (r *Repository) List(ctx context.Context) ([]Category, error) {
+func (r *Repository) List(ctx context.Context, userID int64) ([]Category, error) {
 	rows, err := r.db.Query(ctx,
 		`SELECT id, name, type, created_at
          FROM categories
-         ORDER BY name`)
+         WHERE user_id = $1
+         ORDER BY name`,
+		userID)
 	if err != nil {
 		return nil, err
 	}
@@ -58,13 +60,13 @@ func (r *Repository) List(ctx context.Context) ([]Category, error) {
 	return categories, rows.Err()
 }
 
-func (r *Repository) Get(ctx context.Context, id int64) (Category, error) {
+func (r *Repository) Get(ctx context.Context, userID, id int64) (Category, error) {
 	var c Category
 	err := r.db.QueryRow(ctx,
 		`SELECT id, name, type, created_at
          FROM categories
-         WHERE id = $1`,
-		id,
+         WHERE id = $1 AND user_id = $2`,
+		id, userID,
 	).Scan(&c.ID, &c.Name, &c.Type, &c.CreatedAt)
 	if err != nil {
 		return Category{}, translateError(err)
@@ -72,14 +74,14 @@ func (r *Repository) Get(ctx context.Context, id int64) (Category, error) {
 	return c, nil
 }
 
-func (r *Repository) Update(ctx context.Context, id int64, in Input) (Category, error) {
+func (r *Repository) Update(ctx context.Context, userID, id int64, in Input) (Category, error) {
 	var c Category
 	err := r.db.QueryRow(ctx,
 		`UPDATE categories
          SET name = $1, type = $2
-         WHERE id = $3
+         WHERE id = $3 AND user_id = $4
          RETURNING id, name, type, created_at`,
-		in.Name, in.Type, id,
+		in.Name, in.Type, id, userID,
 	).Scan(&c.ID, &c.Name, &c.Type, &c.CreatedAt)
 	if err != nil {
 		return Category{}, translateError(err)
@@ -87,8 +89,10 @@ func (r *Repository) Update(ctx context.Context, id int64, in Input) (Category, 
 	return c, nil
 }
 
-func (r *Repository) Delete(ctx context.Context, id int64) error {
-	tag, err := r.db.Exec(ctx, `DELETE FROM categories WHERE id = $1`, id)
+func (r *Repository) Delete(ctx context.Context, userID, id int64) error {
+	tag, err := r.db.Exec(ctx,
+		`DELETE FROM categories WHERE id = $1 AND user_id = $2`,
+		id, userID)
 	if err != nil {
 		return translateError(err)
 	}
